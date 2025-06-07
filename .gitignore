@@ -1,0 +1,114 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.dylib
+*.dll
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# PyTorch
+*.pth
+*.pt
+
+# C++
+*.o
+*.a
+*.lib
+*.obj
+*.exe
+*.exp
+*.pdb
+*.idb
+*.ilk
+*.map
+*.tlog
+*.lastbuildstate
+*.iobj
+*.ipdb
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+Makefile
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# System
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.venv/
+env/
+venv/
+
+# Third party dependencies (download separately)
+third_party/
+PanguLU/
+external/
+
+# Logs
+*.log
+*.out
+*.err
+
+# Test outputs
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# CUDA/GPU
+*.cudafe*
+*.fatbin
+*.ptx
+*.cubin
+
+# MPI
+*.mpirun
+
+# Profiling
+*.prof
+*.nvprof
+
+# Benchmarking results
+benchmark_results/
+perf_data/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Documentation build
+docs/_build/
+docs/build/
+
+# Local configuration files
+config.local.*
+.env.local
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
