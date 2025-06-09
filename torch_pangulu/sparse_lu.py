@@ -1,5 +1,5 @@
 import torch
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 
 try:
     from . import _C
@@ -10,15 +10,20 @@ except ImportError:
     )
 
 
-def sparse_lu_factorize(sparse_matrix: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+def sparse_lu_factorize(
+    sparse_matrix: torch.Tensor, 
+    device: Optional[Union[torch.device, str]] = None
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Perform LU factorization of a sparse matrix using PanguLU.
     
     Args:
         sparse_matrix: PyTorch sparse tensor in COO format
+        device: Device to perform computation on. If None, automatically detects from input tensor.
+                For GPU tensors, uses GPU if CUDA support is available, otherwise falls back to CPU.
         
     Returns:
-        Tuple of (L, U) factors as sparse tensors
+        Tuple of (L, U) factors as sparse tensors on the same device as the input
         
     Raises:
         RuntimeError: If factorization fails
@@ -30,13 +35,19 @@ def sparse_lu_factorize(sparse_matrix: torch.Tensor) -> Tuple[torch.Tensor, torc
     if sparse_matrix.layout != torch.sparse_coo:
         sparse_matrix = sparse_matrix.coalesce().to_sparse_coo()
     
-    return _C.sparse_lu_factorize(sparse_matrix)
+    # Convert device to torch.device if string
+    torch_device = None
+    if device is not None:
+        torch_device = torch.device(device) if isinstance(device, str) else device
+    
+    return _C.sparse_lu_factorize(sparse_matrix, torch_device)
 
 
 def sparse_lu_solve(
     sparse_matrix: torch.Tensor, 
     rhs: torch.Tensor,
-    factorize: bool = True
+    factorize: bool = True,
+    device: Optional[Union[torch.device, str]] = None
 ) -> torch.Tensor:
     """
     Solve a sparse linear system using PanguLU.
@@ -45,9 +56,11 @@ def sparse_lu_solve(
         sparse_matrix: PyTorch sparse tensor in COO format (coefficient matrix)
         rhs: Right-hand side tensor
         factorize: Whether to perform factorization (True) or use pre-computed factors
+        device: Device to perform computation on. If None, automatically detects from input tensors.
+                For GPU tensors, uses GPU if CUDA support is available, otherwise falls back to CPU.
         
     Returns:
-        Solution tensor x such that sparse_matrix @ x = rhs
+        Solution tensor x such that sparse_matrix @ x = rhs, on the same device as the input
         
     Raises:
         RuntimeError: If solve fails
@@ -65,4 +78,9 @@ def sparse_lu_solve(
             f"Matrix rows ({sparse_matrix.size(0)}) must match RHS rows ({rhs.size(0)})"
         )
     
-    return _C.sparse_lu_solve(sparse_matrix, rhs, factorize)
+    # Convert device to torch.device if string
+    torch_device = None
+    if device is not None:
+        torch_device = torch.device(device) if isinstance(device, str) else device
+    
+    return _C.sparse_lu_solve(sparse_matrix, rhs, factorize, torch_device)

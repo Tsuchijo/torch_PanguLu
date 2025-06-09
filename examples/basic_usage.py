@@ -24,6 +24,9 @@ def create_test_matrix(n=1000, density=0.01):
     scipy_matrix = scipy_matrix + scipy_matrix.T
     scipy_matrix.setdiag(scipy_matrix.diagonal() + n * 0.1)
     
+    # Ensure it's in COO format
+    scipy_matrix = scipy_matrix.tocoo()
+    
     # Convert to PyTorch sparse tensor
     indices = torch.from_numpy(np.vstack([scipy_matrix.row, scipy_matrix.col])).long()
     values = torch.from_numpy(scipy_matrix.data).double()

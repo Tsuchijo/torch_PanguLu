@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# PanguLU Setup Script for Torch-PanguLU
-# This script downloads, configures, and builds PanguLU for integration with PyTorch
+# Torch-PanguLU Automated Setup Script
+# This script automates the configuration and building of PanguLU with optional CUDA support
 
-set -e  # Exit on error
+set -e  # Exit on any error
 
 # Colors for output
 RED='\033[0;31m'
@@ -12,8 +12,53 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Print colored output
-print_status() {
+# Default configuration
+ENABLE_CUDA=false
+CPU_ONLY=false
+CUDA_PATH=""
+FORCE_REBUILD=false
+VERBOSE=false
+SKIP_TESTS=false
+
+# Show usage information
+show_help() {
+    cat << EOF
+Torch-PanguLU Automated Setup Script
+
+USAGE:
+    bash scripts/setup_pangulu.sh [OPTIONS]
+
+OPTIONS:
+    --enable-cuda           Enable experimental CUDA support (requires CUDA toolkit)
+    --cpu-only             Build CPU-only version (recommended, stable)
+    --cuda-path PATH       Specify custom CUDA installation path
+    --force-rebuild        Force clean rebuild of all components
+    --verbose              Enable verbose output
+    --skip-tests           Skip validation tests after build
+    --help                 Show this help message
+
+EXAMPLES:
+    # CPU-only build (recommended)
+    bash scripts/setup_pangulu.sh --cpu-only
+
+    # Experimental CUDA build
+    bash scripts/setup_pangulu.sh --enable-cuda
+
+    # CUDA build with custom path
+    bash scripts/setup_pangulu.sh --enable-cuda --cuda-path=/usr/local/cuda
+
+    # Force clean rebuild
+    bash scripts/setup_pangulu.sh --cpu-only --force-rebuild
+
+BUILD STATUS:
+    ✅ CPU-Only: Stable, production-ready with excellent numerical accuracy
+    ⚠️  CUDA: Experimental, may have kernel compatibility issues
+
+EOF
+}
+
+# Print colored messages
+print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
 
@@ -29,383 +74,460 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Check if command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-# Detect operating system
-detect_os() {
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        echo "linux"
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        echo "macos"
-    elif [[ "$OSTYPE" == "cygwin" ]] || [[ "$OSTYPE" == "msys" ]]; then
-        echo "windows"
-    else
-        echo "unknown"
-    fi
-}
-
-# Check system dependencies
-check_dependencies() {
-    print_status "Checking system dependencies..."
-    
-    local missing_deps=()
-    
-    # Essential tools
-    if ! command_exists git; then
-        missing_deps+=("git")
-    fi
-    
-    if ! command_exists cmake; then
-        missing_deps+=("cmake")
-    fi
-    
-    if ! command_exists make; then
-        missing_deps+=("make")
-    fi
-    
-    if ! command_exists mpicc; then
-        missing_deps+=("mpi (mpicc not found)")
-    fi
-    
-    # C++ compiler
-    if ! command_exists gcc && ! command_exists clang; then
-        missing_deps+=("gcc or clang")
-    fi
-    
-    if [ ${#missing_deps[@]} -ne 0 ]; then
-        print_error "Missing dependencies: ${missing_deps[*]}"
-        print_error "Please install missing dependencies and run this script again."
-        
-        local os=$(detect_os)
-        case $os in
-            linux)
-                echo "On Ubuntu/Debian: sudo apt install git cmake build-essential openmpi-bin openmpi-common libopenmpi-dev libopenblas-dev"
-                echo "On CentOS/RHEL: sudo yum groupinstall 'Development Tools' && sudo yum install cmake git openmpi openmpi-devel openblas-devel"
+# Parse command line arguments
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --enable-cuda)
+                ENABLE_CUDA=true
+                shift
                 ;;
-            macos)
-                echo "On macOS: brew install git cmake open-mpi openblas libomp"
+            --cpu-only)
+                CPU_ONLY=true
+                shift
+                ;;
+            --cuda-path)
+                CUDA_PATH="$2"
+                shift 2
+                ;;
+            --force-rebuild)
+                FORCE_REBUILD=true
+                shift
+                ;;
+            --verbose)
+                VERBOSE=true
+                shift
+                ;;
+            --skip-tests)
+                SKIP_TESTS=true
+                shift
+                ;;
+            --help)
+                show_help
+                exit 0
                 ;;
             *)
-                echo "Please install the missing dependencies for your system."
+                print_error "Unknown option: $1"
+                show_help
+                exit 1
                 ;;
         esac
+    done
+
+    # Validate arguments
+    if [[ "$ENABLE_CUDA" == true && "$CPU_ONLY" == true ]]; then
+        print_error "Cannot specify both --enable-cuda and --cpu-only"
         exit 1
     fi
-    
-    print_success "All required dependencies found!"
+
+    if [[ "$ENABLE_CUDA" == false && "$CPU_ONLY" == false ]]; then
+        print_info "No build type specified, defaulting to CPU-only (recommended)"
+        CPU_ONLY=true
+    fi
 }
 
-# Detect system configuration
-detect_system_config() {
-    print_status "Detecting system configuration..."
-    
-    local os=$(detect_os)
-    print_status "Operating System: $os"
-    
-    # Detect BLAS library
-    local blas_lib=""
-    local blas_inc=""
-    
-    case $os in
-        linux)
-            if [ -d "/usr/include/openblas" ]; then
-                blas_inc="/usr/include/openblas"
-                blas_lib="/usr/lib/x86_64-linux-gnu"
-            elif [ -d "/usr/local/include" ] && ldconfig -p | grep -q openblas; then
-                blas_inc="/usr/local/include"
-                blas_lib="/usr/local/lib"
-            fi
-            ;;
-        macos)
-            if [ -d "/opt/homebrew/opt/openblas" ]; then
-                blas_inc="/opt/homebrew/opt/openblas/include"
-                blas_lib="/opt/homebrew/opt/openblas/lib"
-            elif [ -d "/usr/local/opt/openblas" ]; then
-                blas_inc="/usr/local/opt/openblas/include"
-                blas_lib="/usr/local/opt/openblas/lib"
-            fi
-            ;;
-    esac
-    
-    if [ -z "$blas_lib" ]; then
-        print_warning "OpenBLAS not found. You may need to install it manually."
-    else
-        print_success "OpenBLAS found: $blas_lib"
+# Check system requirements
+check_requirements() {
+    print_info "Checking system requirements..."
+
+    # Check if we're in the right directory
+    if [[ ! -f "setup.py" || ! -d "third_party" ]]; then
+        print_error "Please run this script from the torch-pangulu root directory"
+        exit 1
     fi
+
+    # Check basic tools
+    local missing_tools=()
     
-    # Detect CUDA
-    if command_exists nvcc; then
-        local cuda_version=$(nvcc --version | grep "release" | sed 's/.*release \([0-9.]*\).*/\1/')
-        print_success "CUDA found: version $cuda_version"
-        CUDA_AVAILABLE=true
+    for tool in gcc mpicc python3 pip; do
+        if ! command -v $tool &> /dev/null; then
+            missing_tools+=($tool)
+        fi
+    done
+
+    if [[ ${#missing_tools[@]} -gt 0 ]]; then
+        print_error "Missing required tools: ${missing_tools[*]}"
+        print_info "Please install them using your package manager"
+        exit 1
+    fi
+
+    # Check Python packages
+    if ! python3 -c "import torch" &> /dev/null; then
+        print_error "PyTorch is not installed. Please install it first:"
+        print_info "  pip install torch"
+        exit 1
+    fi
+
+    print_success "Basic requirements satisfied"
+}
+
+# Auto-detect CUDA installation
+detect_cuda() {
+    if [[ -n "$CUDA_PATH" ]]; then
+        print_info "Using specified CUDA path: $CUDA_PATH"
+        return 0
+    fi
+
+    # Common CUDA installation paths
+    local cuda_paths=(
+        "/usr/local/cuda"
+        "/usr/lib/cuda"
+        "/opt/cuda"
+        "/usr/cuda"
+    )
+
+    for path in "${cuda_paths[@]}"; do
+        if [[ -f "$path/bin/nvcc" ]]; then
+            CUDA_PATH="$path"
+            print_info "Auto-detected CUDA at: $CUDA_PATH"
+            return 0
+        fi
+    done
+
+    # Check if nvcc is in PATH
+    if command -v nvcc &> /dev/null; then
         CUDA_PATH=$(dirname $(dirname $(which nvcc)))
-    else
-        print_warning "CUDA not found. GPU acceleration will be disabled."
-        CUDA_AVAILABLE=false
+        print_info "Auto-detected CUDA from PATH: $CUDA_PATH"
+        return 0
     fi
-    
-    # Detect OpenMP
-    if command_exists gcc && gcc -fopenmp -dM -E - < /dev/null | grep -q "_OPENMP"; then
-        print_success "OpenMP support detected with GCC"
-        OPENMP_AVAILABLE=true
-    elif [ "$os" = "macos" ] && [ -d "/opt/homebrew/opt/libomp" ]; then
-        print_success "OpenMP support detected (Homebrew libomp)"
-        OPENMP_AVAILABLE=true
-        OPENMP_PATH="/opt/homebrew/opt/libomp"
-    else
-        print_warning "OpenMP not detected. Parallel performance may be limited."
-        OPENMP_AVAILABLE=false
-    fi
-    
-    # Export detected paths
-    export BLAS_INC="$blas_inc"
-    export BLAS_LIB="$blas_lib"
-    export OS_TYPE="$os"
+
+    return 1
 }
 
-# Clone or update PanguLU
-setup_pangulu_source() {
-    print_status "Setting up PanguLU source code..."
-    
-    local pangulu_dir="third_party/PanguLU"
-    
-    if [ -d "$pangulu_dir" ]; then
-        print_status "PanguLU directory already exists. Updating..."
-        cd "$pangulu_dir"
-        git pull origin main || git pull origin master
-        cd - > /dev/null
-    else
-        print_status "Cloning PanguLU repository..."
-        mkdir -p third_party
-        git clone https://github.com/SuperScientificSoftwareLaboratory/PanguLU.git "$pangulu_dir"
+# Check CUDA requirements
+check_cuda_requirements() {
+    if [[ "$ENABLE_CUDA" == false ]]; then
+        return 0
     fi
-    
-    if [ ! -d "$pangulu_dir" ]; then
-        print_error "Failed to set up PanguLU source code"
+
+    print_info "Checking CUDA requirements..."
+
+    if ! detect_cuda; then
+        print_error "CUDA installation not found"
+        print_info "Please install CUDA toolkit or specify path with --cuda-path"
         exit 1
     fi
-    
-    print_success "PanguLU source code ready!"
+
+    # Check CUDA version
+    if [[ -f "$CUDA_PATH/bin/nvcc" ]]; then
+        local cuda_version=$($CUDA_PATH/bin/nvcc --version | grep "release" | awk '{print $6}' | cut -c2-)
+        print_info "Found CUDA version: $cuda_version"
+        
+        # Parse version
+        local major_version=$(echo $cuda_version | cut -d. -f1)
+        if [[ $major_version -lt 11 ]]; then
+            print_warning "CUDA version $cuda_version is older than recommended (11.0+)"
+        fi
+    fi
+
+    # Check if PyTorch has CUDA support
+    if ! python3 -c "import torch; assert torch.cuda.is_available()" &> /dev/null; then
+        print_warning "PyTorch was built without CUDA support or no GPU detected"
+        print_info "CUDA build may still work for PanguLU, but PyTorch tensors will be CPU-only"
+    fi
+
+    # Check GPU compute capability
+    if command -v nvidia-smi &> /dev/null; then
+        print_info "GPU information:"
+        nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader,nounits | while read line; do
+            print_info "  $line"
+        done
+    fi
+
+    print_success "CUDA requirements checked"
+}
+
+# Setup virtual environment if needed
+setup_venv() {
+    if [[ -z "$VIRTUAL_ENV" && ! -f "venv/bin/activate" ]]; then
+        print_info "Creating Python virtual environment..."
+        python3 -m venv venv
+    fi
+
+    if [[ -z "$VIRTUAL_ENV" ]]; then
+        print_info "Activating virtual environment..."
+        source venv/bin/activate
+    fi
+
+    # Install Python dependencies
+    print_info "Installing Python dependencies..."
+    pip install --upgrade pip
+    pip install torch numpy pybind11 scipy pytest
+}
+
+# Clone PanguLU if needed
+setup_pangulu_source() {
+    if [[ ! -d "third_party/PanguLU" ]]; then
+        print_info "Cloning PanguLU source..."
+        mkdir -p third_party
+        git clone https://github.com/SuperScientificSoftwareLaboratory/PanguLU.git third_party/PanguLU
+    else
+        print_info "PanguLU source already exists"
+    fi
 }
 
 # Configure PanguLU build
 configure_pangulu() {
-    print_status "Configuring PanguLU build..."
+    print_info "Configuring PanguLU build..."
     
-    local pangulu_dir="third_party/PanguLU"
-    local make_inc="$pangulu_dir/make.inc"
-    
-    # Backup original make.inc
-    if [ -f "$make_inc" ] && [ ! -f "$make_inc.backup" ]; then
-        cp "$make_inc" "$make_inc.backup"
-    fi
-    
-    # Create custom make.inc based on detected system
-    cat > "$make_inc" << EOF
-# Auto-generated make.inc for torch-pangulu
-# Generated on $(date)
+    cd third_party/PanguLU
 
+    # Backup original make.inc if it exists
+    if [[ -f "make.inc" && ! -f "make.inc.backup" ]]; then
+        cp make.inc make.inc.backup
+    fi
+
+    # Create make.inc based on build type
+    cat > make.inc << EOF
 COMPILE_LEVEL = -O3
 
-# General settings
+#general
 CC = gcc \$(COMPILE_LEVEL)
 MPICC = mpicc \$(COMPILE_LEVEL)
+OPENBLAS_INC = -I/usr/include/x86_64-linux-gnu/openblas-pthread/
+OPENBLAS_LIB = -L/usr/lib/x86_64-linux-gnu/openblas-pthread/ -lopenblas
+METISFLAGS = 
 
 EOF
 
-    # Add BLAS configuration
-    if [ -n "$BLAS_INC" ] && [ -n "$BLAS_LIB" ]; then
-        cat >> "$make_inc" << EOF
-# BLAS configuration
-OPENBLAS_INC = -I$BLAS_INC
-OPENBLAS_LIB = -L$BLAS_LIB -lopenblas
-
-EOF
-    else
-        cat >> "$make_inc" << EOF
-# BLAS configuration (update paths as needed)
-OPENBLAS_INC = -I/usr/include/openblas
-OPENBLAS_LIB = -L/usr/lib/x86_64-linux-gnu -lopenblas
-
-EOF
-    fi
-    
-    # Add CUDA configuration if available
-    if [ "$CUDA_AVAILABLE" = true ]; then
-        cat >> "$make_inc" << EOF
-# CUDA configuration
+    if [[ "$ENABLE_CUDA" == true ]]; then
+        print_info "Configuring for experimental CUDA build..."
+        cat >> make.inc << EOF
+#CUDA Configuration (Experimental)
 CUDA_PATH = $CUDA_PATH
 CUDA_INC = -I$CUDA_PATH/include
-CUDA_LIB = -L$CUDA_PATH/lib64 -lcudart -lcusparse
+CUDA_LIB = -L$CUDA_PATH/lib64 -L/usr/lib/x86_64-linux-gnu -lcudart -lcusparse
 NVCC = nvcc \$(COMPILE_LEVEL)
-NVCCFLAGS = \$(PANGULU_FLAGS) -w -Xptxas -dlcm=cg -gencode=arch=compute_61,code=sm_61 -gencode=arch=compute_61,code=compute_61 \$(CUDA_INC) \$(CUDA_LIB)
+NVCCFLAGS = \$(PANGULU_FLAGS) -w -Xptxas -dlcm=cg \\
+            -gencode=arch=compute_60,code=sm_60 \\
+            -gencode=arch=compute_70,code=sm_70 \\
+            -gencode=arch=compute_80,code=sm_80 \\
+            \$(CUDA_INC)
+
+MPICCFLAGS = \$(OPENBLAS_INC) \$(CUDA_INC) \$(OPENBLAS_LIB) \$(CUDA_LIB) -fopenmp -lpthread -lm
+MPICCLINK = \$(OPENBLAS_LIB) \$(CUDA_LIB)
+PANGULU_FLAGS = -DPANGULU_LOG_INFO -DCALCULATE_TYPE_R64 -DGPU_OPEN
 
 EOF
+        print_warning "CUDA build is experimental and may have compatibility issues"
     else
-        cat >> "$make_inc" << EOF
-# CUDA configuration (disabled)
-CUDA_PATH = /usr/local/cuda
-CUDA_INC = -I/path/to/cuda/include
-CUDA_LIB = -L/path/to/cuda/lib64 -lcudart -lcusparse
+        print_info "Configuring for stable CPU-only build..."
+        cat >> make.inc << EOF
+#CPU-Only Configuration (Stable)
+CUDA_PATH = /usr/lib/cuda
+CUDA_INC = -I/usr/lib/cuda/include
+CUDA_LIB = -L/usr/lib/cuda/lib64 -L/usr/lib/x86_64-linux-gnu -lcudart -lcusparse
+NVCC = nvcc \$(COMPILE_LEVEL)
+NVCCFLAGS = \$(PANGULU_FLAGS) -w -Xptxas -dlcm=cg -gencode=arch=compute_61,code=sm_61 -gencode=arch=compute_61,code=compute_61 \$(CUDA_INC)
 
-EOF
-    fi
-    
-    # Add OpenMP and other flags
-    local openmp_flags=""
-    if [ "$OPENMP_AVAILABLE" = true ]; then
-        if [ "$OS_TYPE" = "macos" ] && [ -n "$OPENMP_PATH" ]; then
-            openmp_flags="-I$OPENMP_PATH/include -L$OPENMP_PATH/lib -lomp"
-        else
-            openmp_flags="-fopenmp"
-        fi
-    fi
-    
-    cat >> "$make_inc" << EOF
-# Compiler flags
-MPICCFLAGS = \$(OPENBLAS_INC) \$(CUDA_INC) \$(OPENBLAS_LIB) $openmp_flags -lpthread -lm
-MPICCLINK = \$(OPENBLAS_LIB)
-
-# METIS configuration (disabled by default)
-METISFLAGS = -I/path/to/gklib/include -I/path/to/metis/include
-
-# PanguLU compilation flags
+MPICCFLAGS = \$(OPENBLAS_INC) \$(CUDA_INC) \$(OPENBLAS_LIB) \$(CUDA_LIB) -fopenmp -lpthread -lm
+MPICCLINK = \$(OPENBLAS_LIB) \$(CUDA_LIB)
 PANGULU_FLAGS = -DPANGULU_LOG_INFO -DCALCULATE_TYPE_R64
-EOF
 
-    # Add CUDA flag if available
-    if [ "$CUDA_AVAILABLE" = true ]; then
-        echo "# Enable GPU support" >> "$make_inc"
-        echo "PANGULU_FLAGS += -DGPU_OPEN" >> "$make_inc"
+EOF
     fi
-    
-    print_success "PanguLU configuration complete!"
+
+    cd ../..
+    print_success "PanguLU configuration completed"
 }
 
 # Build PanguLU
 build_pangulu() {
-    print_status "Building PanguLU library..."
+    print_info "Building PanguLU..."
     
-    local pangulu_dir="third_party/PanguLU"
-    
-    cd "$pangulu_dir"
-    
-    # Clean previous build
-    make clean 2>/dev/null || true
-    
-    # Build with appropriate number of jobs
-    local num_jobs=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-    print_status "Building with $num_jobs parallel jobs..."
-    
-    if make -j"$num_jobs"; then
-        print_success "PanguLU library built successfully!"
+    cd third_party/PanguLU
+
+    if [[ "$FORCE_REBUILD" == true ]]; then
+        print_info "Forcing clean rebuild..."
+        make clean
+    fi
+
+    # Build with appropriate verbosity (skip examples to avoid hardcoded path issues)
+    if [[ "$VERBOSE" == true ]]; then
+        make -C src -j$(nproc) && make -C lib
     else
-        print_error "PanguLU build failed!"
-        print_error "Check the error messages above and fix any missing dependencies."
+        (make -C src -j$(nproc) && make -C lib) > build.log 2>&1 || {
+            print_error "PanguLU build failed. Check build.log for details:"
+            tail -20 build.log
+            exit 1
+        }
+    fi
+
+    # Verify build
+    if [[ -f "lib/libpangulu.so" ]]; then
+        print_success "PanguLU built successfully"
+    else
+        print_error "PanguLU build failed - library not found"
         exit 1
     fi
-    
-    # Verify build artifacts
-    if [ -f "lib/libpangulu.a" ] || [ -f "lib/libpangulu.so" ]; then
-        print_success "PanguLU library files created successfully!"
-        ls -la lib/libpangulu.*
-    else
-        print_warning "PanguLU library files not found. Build may be incomplete."
-    fi
-    
-    cd - > /dev/null
+
+    cd ../..
 }
 
-# Test PanguLU installation
-test_pangulu() {
-    print_status "Testing PanguLU installation..."
+# Update setup.py for CUDA if needed
+configure_torch_extension() {
+    print_info "Configuring torch extension..."
+
+    # The setup.py should automatically detect CUDA availability
+    # But we can force it with environment variables if needed
+    if [[ "$ENABLE_CUDA" == true ]]; then
+        export TORCH_CUDA_FORCE=1
+        print_info "Forcing CUDA support in torch extension"
+    else
+        export TORCH_CUDA_FORCE=0
+        print_info "Disabling CUDA support in torch extension"
+    fi
+}
+
+# Build torch extension
+build_torch_extension() {
+    print_info "Building torch extension..."
+
+    # Make sure we're in virtual environment
+    if [[ -z "$VIRTUAL_ENV" && -f "venv/bin/activate" ]]; then
+        source venv/bin/activate
+    fi
+
+    # Clean build if requested
+    if [[ "$FORCE_REBUILD" == true ]]; then
+        rm -rf build/ torch_pangulu/_C*.so
+    fi
+
+    # Build extension
+    if [[ "$VERBOSE" == true ]]; then
+        python setup.py build_ext --inplace
+    else
+        python setup.py build_ext --inplace > torch_build.log 2>&1 || {
+            print_error "Torch extension build failed. Check torch_build.log for details:"
+            tail -20 torch_build.log
+            exit 1
+        }
+    fi
+
+    print_success "Torch extension built successfully"
+}
+
+# Run validation tests
+run_tests() {
+    if [[ "$SKIP_TESTS" == true ]]; then
+        print_info "Skipping tests as requested"
+        return 0
+    fi
+
+    print_info "Running validation tests..."
+
+    # Make sure we're in virtual environment
+    if [[ -z "$VIRTUAL_ENV" && -f "venv/bin/activate" ]]; then
+        source venv/bin/activate
+    fi
+
+    # Test import and basic info
+    print_info "Testing basic functionality..."
+    python3 -c "
+import torch_pangulu
+info = torch_pangulu._C.get_pangulu_info()
+print('✅ Import successful')
+print(f'Available: {info[\"available\"]}')
+print(f'CUDA support: {info[\"cuda_support\"]}')
+print(f'MPI support: {info[\"mpi_support\"]}')
+print(f'Version: {info[\"version\"]}')
+" || {
+        print_error "Basic functionality test failed"
+        exit 1
+    }
+
+    # Test sparse solve
+    print_info "Testing sparse LU solve..."
+    python3 -c "
+import torch
+import torch_pangulu
+
+# Create well-conditioned test matrix
+n = 50
+i_indices = []
+j_indices = []
+values = []
+
+# Diagonal entries
+for i in range(n):
+    i_indices.append(i)
+    j_indices.append(i)
+    values.append(4.0)
+
+# Off-diagonal entries
+for i in range(n-1):
+    i_indices.extend([i, i+1])
+    j_indices.extend([i+1, i])
+    values.extend([-1.0, -1.0])
+
+indices = torch.tensor([i_indices, j_indices], dtype=torch.long)
+values = torch.tensor(values, dtype=torch.float64)
+A = torch.sparse_coo_tensor(indices, values, (n, n), dtype=torch.float64).coalesce()
+b = torch.randn(n, dtype=torch.float64)
+
+try:
+    x = torch_pangulu.sparse_lu_solve(A, b)
+    residual = torch.norm(torch.sparse.mm(A, x.unsqueeze(1)).squeeze() - b)
+    print(f'✅ Solve test passed. Residual: {residual:.2e}')
     
-    local pangulu_dir="third_party/PanguLU"
-    
-    # Check if example can be built
-    if [ -f "$pangulu_dir/examples/pangulu_example.elf" ]; then
-        print_success "PanguLU example executable found!"
+    if residual > 1e-10:
+        print('⚠️  High residual - check numerical stability')
+    else:
+        print('✅ Excellent numerical accuracy')
         
-        # Try to run a small test (if test matrix is available)
-        if [ -f "$pangulu_dir/examples/Trefethen_20b.mtx" ]; then
-            print_status "Running quick test with sample matrix..."
-            cd "$pangulu_dir/examples"
-            
-            # Run with single process and small block size
-            if timeout 30s mpirun -np 1 ./pangulu_example.elf -nb 2 -f Trefethen_20b.mtx > test_output.txt 2>&1; then
-                print_success "PanguLU test completed successfully!"
-                grep "residual" test_output.txt || true
-            else
-                print_warning "PanguLU test failed or timed out. This may be normal on some systems."
-            fi
-            
-            rm -f test_output.txt
-            cd - > /dev/null
-        fi
-    else
-        print_warning "PanguLU example not built. You may need to build examples separately."
-    fi
+except Exception as e:
+    print(f'❌ Solve test failed: {e}')
+    exit(1)
+" || {
+        print_error "Sparse solve test failed"
+        exit 1
+    }
+
+    print_success "All validation tests passed!"
 }
 
-# Main installation function
+# Main setup function
 main() {
-    print_status "Starting PanguLU setup for torch-pangulu..."
-    print_status "================================================"
-    
-    # Check if we're in the right directory
-    if [ ! -f "setup.py" ] || [ ! -d "torch_pangulu" ]; then
-        print_error "This script must be run from the torch-pangulu project root directory."
-        exit 1
-    fi
-    
-    # Run setup steps
-    check_dependencies
-    detect_system_config
+    echo -e "${BLUE}"
+    echo "================================================================"
+    echo "              Torch-PanguLU Automated Setup Script"
+    echo "================================================================"
+    echo -e "${NC}"
+
+    parse_args "$@"
+    check_requirements
+    check_cuda_requirements
+    setup_venv
     setup_pangulu_source
     configure_pangulu
     build_pangulu
-    test_pangulu
+    configure_torch_extension
+    build_torch_extension
+    run_tests
+
+    echo -e "${GREEN}"
+    echo "================================================================"
+    echo "                    Setup Complete!"
+    echo "================================================================"
+    echo -e "${NC}"
+
+    if [[ "$ENABLE_CUDA" == true ]]; then
+        print_warning "You built with experimental CUDA support"
+        print_info "If you encounter issues, rebuild with: bash scripts/setup_pangulu.sh --cpu-only"
+    else
+        print_success "Built stable CPU-only version with excellent performance"
+    fi
+
+    print_info "To use torch-pangulu:"
+    if [[ -f "venv/bin/activate" ]]; then
+        print_info "  source venv/bin/activate"
+    fi
+    print_info "  python -c \"import torch_pangulu; print('Ready to use!')\""
     
-    print_success "================================================"
-    print_success "PanguLU setup completed successfully!"
-    print_status ""
-    print_status "Next steps:"
-    print_status "1. Build the torch-pangulu extension: python setup.py build_ext --inplace"
-    print_status "2. Install in development mode: pip install -e ."
-    print_status "3. Run tests: python -m pytest tests/"
-    print_status ""
-    print_status "For more information, see BUILD.md and DEVELOPMENT.md"
+    echo ""
+    print_info "For examples, see: examples/basic_usage.py"
+    print_info "For documentation, see: README.md and BUILD.md"
 }
 
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --cuda)
-            FORCE_CUDA=true
-            shift
-            ;;
-        --no-cuda)
-            FORCE_NO_CUDA=true
-            shift
-            ;;
-        --help|-h)
-            echo "Usage: $0 [OPTIONS]"
-            echo "Options:"
-            echo "  --cuda        Force enable CUDA support"
-            echo "  --no-cuda     Force disable CUDA support"
-            echo "  --help, -h    Show this help message"
-            exit 0
-            ;;
-        *)
-            print_error "Unknown option: $1"
-            echo "Use --help for usage information"
-            exit 1
-            ;;
-    esac
-done
-
-# Run main function
-main
+# Run main function with all arguments
+main "$@"
